@@ -1,0 +1,11 @@
+{
+  "device_sn": "",
+  "mqtt_broker": "",
+  "mqtt_port": ,
+  "mqtt_username": "",
+  "mqtt_password": "",
+  "sensors_amount": 1,
+  "wait_time": 10,
+  "modbus_port": "/dev/ttyUSB0",
+  "modbus_baudrate": 9600
+}
