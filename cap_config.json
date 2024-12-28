@@ -1,0 +1,11 @@
+{
+    "device_sn": 1,
+    "temp_dir": "./temp",
+    "sftp_host": "",
+    "sftp_port": ,
+    "sftp_username": "",
+    "sftp_password": "",
+    "remote_folder_path": "",
+    "capture_cycle": 10,
+    "retries": 3
+}
