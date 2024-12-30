@@ -25,10 +25,6 @@ MQTT_USERNAME = config["MQTT_USERNAME"]  # MQTT 用户名
 MQTT_PASSWORD = config["MQTT_PASSWORD"]  # MQTT 密码
 MQTT_TOPIC = config["MQTT_TOPIC"] # MQTT 订阅主题
 
-# 日志配置
-LOG_FILE = 'sensor_data.log'     # 日志文件
-LOG_ENCODING = 'utf-8'           # 日志文件编码
-# ==================================================
 
 # === 日志配置 ===
 def configure_logger(log_file_path):
