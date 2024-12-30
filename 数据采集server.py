@@ -6,24 +6,24 @@ from datetime import datetime
 import re
 import queue
 from threading import Thread
-
+from logging.handlers import TimedRotatingFileHandler
 # =================== 关键参数配置 ===================
-# MQTT 配置
-MQTT_BROKER = ""  # MQTT 代理地址
-MQTT_PORT =               # MQTT 代理端口
-MQTT_USERNAME = ""  # MQTT 用户名
-MQTT_PASSWORD = ""  # MQTT 密码
-MQTT_TOPIC = "/sensor_data/#"  # MQTT 订阅主题
 
-# MySQL 配置
-MYSQL_CONFIG = {
-    "host": "localhost",
-    "user": "",
-    "password": "",
-    "database": "sensor_data",
-    "charset": "utf8mb4",
-    "cursorclass": pymysql.cursors.DictCursor  # 返回字典形式结果
-}
+# 配置 MySQL 数据库连接
+with open("server_config.json", "r") as config_file:
+    raw_config = json.load(config_file)
+
+# 过滤掉注释键
+config = {k: v for k, v in raw_config.items() if not k.startswith("_")}
+
+MYSQL_CONFIG = config["COLLECT_MYSQL_CONFIG"]
+MYSQL_CONFIG["cursorclass"] = pymysql.cursors.DictCursor
+# MQTT 配置
+MQTT_BROKER = config["MQTT_BROKER"]  # MQTT 代理地址
+MQTT_PORT = config["MQTT_PORT"]            # MQTT 代理端口
+MQTT_USERNAME = config["MQTT_USERNAME"]  # MQTT 用户名
+MQTT_PASSWORD = config["MQTT_PASSWORD"]  # MQTT 密码
+MQTT_TOPIC = config["MQTT_TOPIC"] # MQTT 订阅主题
 
 # 日志配置
 LOG_FILE = 'sensor_data.log'     # 日志文件
@@ -31,14 +31,26 @@ LOG_ENCODING = 'utf-8'           # 日志文件编码
 # ==================================================
 
 # === 日志配置 ===
-def configure_logger():
+def configure_logger(log_file_path):
     """配置全局日志"""
+    # 清除所有已有的处理器
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+    # 创建一个按天滚动的日志处理器
+    log_handler = TimedRotatingFileHandler(
+        log_file_path, when="midnight", interval=1, backupCount=7, encoding="utf-8"
+    )
+    log_handler.setLevel(logging.INFO)
+    log_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+
+    # 配置全局日志
+    logging.basicConfig(level=logging.INFO, handlers=[log_handler])
+
     return logging.getLogger(__name__)
 
-logger = configure_logger()
+# 指定日志文件路径
+logger = configure_logger("./logs/sensor_collect/sensor_collect_server.log")
 
 # 全局变量
 client = None
