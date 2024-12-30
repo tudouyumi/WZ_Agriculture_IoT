@@ -11,12 +11,16 @@ from inotify.adapters import InotifyTree
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 from logging.handlers import TimedRotatingFileHandler
+
 # === 配置 ===
+with open("server_config.json", "r") as config_file:
+    raw_config = json.load(config_file)
+
+# 过滤掉注释键
+config = {k: v for k, v in raw_config.items() if not k.startswith("_")}
+
 BASE_DIR = "pictures_data"
 COMPRESS_QUALITY = 85
-BASE_URL = "http://39.106.3.206:51026"
-
-# === 日志配置 ===
 
 
 # === 日志配置 ===
@@ -39,7 +43,7 @@ def configure_logger(log_file_path):
     return logging.getLogger(__name__)
 
 # 指定日志文件路径
-logger = configure_logger("./logs/app.log")
+logger = configure_logger("./logs/data_processing/data_processing_server.log")
 
 
 DB_CONFIG_SENSOR = {
