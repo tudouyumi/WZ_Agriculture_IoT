@@ -6,32 +6,46 @@ from flask import Flask, request, jsonify, send_from_directory
 from queue import Queue
 from datetime import datetime
 from collections import OrderedDict
-
+from logging.handlers import TimedRotatingFileHandler
 # === 配置 ===
-BASE_DIR = "pictures_data"
-COMPRESS_QUALITY = 85
-BASE_URL = "http://39.106.3.206:51060"
+with open("server_config.json", "r") as config_file:
+    raw_config = json.load(config_file)
 
-DB_CONFIG_PICTURE = {
-    "host": "localhost",
-    "user": "root",
-    "password": "wz",
-    "database": "picture_data",
-    "charset": "utf8mb4",
-    "cursorclass": pymysql.cursors.DictCursor
-}
+# 过滤掉注释键
+config = {k: v for k, v in raw_config.items() if not k.startswith("_")}
+
+
+BASE_DIR = config["BASE_DIR"]
+COMPRESS_QUALITY = config["COMPRESS_QUALITY"]
+BASE_URL = config["BASE_URL"]
+DB_CONFIG_PICTURE = config["DB_CONFIG_PICTURE"]
+DEVICE_RANGE = range(config["DEVICE_RANGE_START"], config["DEVICE_RANGE_END"] + 1)
+
+DB_CONFIG_PICTURE["cursorclass"] = pymysql.cursors.DictCursor
 
 DEVICE_RANGE = range(1, 11)  # 动态设备范围配置
 
 # === 日志配置 ===
-def configure_logger():
+def configure_logger(log_file_path):
     """配置全局日志"""
+    # 清除所有已有的处理器
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+    # 创建一个按天滚动的日志处理器
+    log_handler = TimedRotatingFileHandler(
+        log_file_path, when="midnight", interval=1, backupCount=7, encoding="utf-8"
+    )
+    log_handler.setLevel(logging.INFO)
+    log_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+
+    # 配置全局日志
+    logging.basicConfig(level=logging.INFO, handlers=[log_handler])
+
     return logging.getLogger(__name__)
 
-logger = configure_logger()
+# 指定日志文件路径
+logger = configure_logger("./logs/picture_api/picture_api_server.log")
 
 # === 初始化 Flask 和 CORS ===
 app = Flask(__name__)
