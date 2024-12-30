@@ -1,0 +1,43 @@
+{
+  "_comment": "这是配置文件的注释，解释每个字段的用途。",
+  "BASE_DIR": "pictures_data",
+  "COMPRESS_QUALITY": 85,
+  "BASE_URL": "",
+  "DB_CONFIG_PICTURE": {
+    "host": "localhost",
+    "user": "root",
+    "password": "",
+    "database": "picture_data",
+    "charset": "utf8mb4"
+  },
+
+    
+  "_comment_DEVICE_RANGE": "DEVICE_RANGE_START 和 DEVICE_RANGE_END 定义了设备的编号范围",
+  "DEVICE_RANGE_START": 1,
+  "DEVICE_RANGE_END": 10,
+
+    
+  "_comment_SENSOR_API": "数据 API 配置",
+  "DB_CONFIG_SENSOR": {
+    "host": "localhost",
+    "user": "root",
+    "password": "",
+    "database": "sensor_data",
+    "charset": "utf8mb4"
+  },
+
+    
+  "_comment_collect_server": "数据收集配置",
+  "MQTT_BROKER": "",
+  "MQTT_PORT": 1883,         
+  "MQTT_USERNAME": "mqtt-server",
+  "MQTT_PASSWORD": "mqtt-server",
+  "MQTT_TOPIC": "/sensor_data/#",
+  "COLLECT_MYSQL_CONFIG": {
+    "host": "localhost",
+    "user": "root",
+    "password": "",
+    "database": "sensor_data",
+    "charset": "utf8mb4"
+  }
+}
