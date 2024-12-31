@@ -34,12 +34,14 @@ app = Flask(__name__)
 CORS(app)
 logger.info("Flask 应用已启动并启用了 CORS 支持")
 
-# 配置 MySQL 数据库连接
-with open("server_config.json", "r") as config_file:
-    raw_config = json.load(config_file)
+try:
+    with open("server_config.json", "r") as config_file:
+        raw_config = json.load(config_file)
+    config = {k: v for k, v in raw_config.items() if not k.startswith("_")}
+except (FileNotFoundError, json.JSONDecodeError) as e:
+    logging.error(f"加载配置文件失败: {e}")
+    raise
 
-# 过滤掉注释键
-config = {k: v for k, v in raw_config.items() if not k.startswith("_")}
 
 DB_CONFIG = config["DB_CONFIG_SENSOR"]
 DB_CONFIG["cursorclass"] = pymysql.cursors.DictCursor
