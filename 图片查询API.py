@@ -7,7 +7,7 @@ from queue import Queue
 from datetime import datetime
 from collections import OrderedDict
 from logging.handlers import TimedRotatingFileHandler
-
+import re
 try:
     with open("server_config.json", "r") as config_file:
         raw_config = json.load(config_file)
@@ -18,7 +18,6 @@ except (FileNotFoundError, json.JSONDecodeError) as e:
 
 
 BASE_DIR = config["BASE_DIR"]
-COMPRESS_QUALITY = config["COMPRESS_QUALITY"]
 BASE_URL = config["BASE_URL"]
 DB_CONFIG_PICTURE = config["DB_CONFIG_PICTURE"]
 DEVICE_RANGE = range(config["SN_RANGE_START"], config["SN_RANGE_END"] + 1)
@@ -28,7 +27,14 @@ DB_CONFIG_PICTURE["cursorclass"] = pymysql.cursors.DictCursor
 
 # === 日志配置 ===
 def configure_logger(log_file_path):
-    """配置全局日志"""
+    """配置全局日志，支持路径检测和按天滚动"""
+    # 获取日志文件的目录路径
+    log_dir = os.path.dirname(log_file_path)
+    
+    # 如果目录不存在，则创建目录
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+    
     # 清除所有已有的处理器
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
@@ -45,8 +51,15 @@ def configure_logger(log_file_path):
 
     return logging.getLogger(__name__)
 
+
 # 指定日志文件路径
 logger = configure_logger("./logs/picture_api/picture_api_server.log")
+
+# 测试日志记录
+logger.info("日志系统已成功配置。")
+
+
+
 
 # === 初始化 Flask 和 CORS ===
 app = Flask(__name__)
@@ -173,6 +186,10 @@ def serve_file(filename):
 def get_latest_image():
     """获取指定设备的最新图片"""
     device_sn = request.args.get('device_sn')
+    
+    if not re.match(r"^\d+$", str(device_sn)):
+        return jsonify({"error": "device_sn 参数是整数"}), 400
+
     if not device_sn:
         logger.warning("API 请求缺少 device_sn 参数。")
         return jsonify({"error": "device_sn 参数是必须的"}), 400
@@ -233,33 +250,49 @@ def get_all_devices_latest():
 
 @app.route('/api/images_by_date', methods=['GET'])
 def get_images_by_date():
-    """获取指定设备在日期范围内的图片"""
+    """获取指定设备在日期时间范围内的图片（不带分页）"""
     device_sn = request.args.get('device_sn')
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
-    page = int(request.args.get('page', 1))
-    page_size = int(request.args.get('page_size', 10))
-    offset = (page - 1) * page_size
 
+    # 参数校验
     if not device_sn or not start_date or not end_date:
         logger.warning("API 请求缺少必要参数。")
         return jsonify({"error": "device_sn, start_date 和 end_date 参数是必须的"}), 400
 
-    table_name = get_table_name(device_sn)
-    if not table_name:
+    # 校验 device_sn 是否为数字
+    if not device_sn.isdigit():
+        logger.warning(f"无效的 device_sn: {device_sn}")
         return jsonify({"error": "无效的 device_sn 参数"}), 400
 
+    # 校验日期时间格式
+    try:
+        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S")
+        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S")
+        if start_date_obj > end_date_obj:
+            raise ValueError("起始日期不能晚于结束日期")
+    except ValueError as e:
+        logger.warning(f"日期格式错误: {e}")
+        return jsonify({"error": "日期格式错误，需为 YYYY-MM-DD HH:MM:SS"}), 400
+
+    # 动态获取表名
+   
+    table_name = get_table_name(device_sn)
+    if not table_name:
+        logger.warning(f"无效的设备编号: {device_sn}")
+        return jsonify({"error": "无效的 device_sn 参数"}), 400
+    # 数据查询
     try:
         conn = get_connection()
         with conn.cursor() as cursor:
-            cursor.execute(f'''
+            query = f'''
                 SELECT original_path, thumbnail_path, upload_time,
                        humidity, temperature, light, co2
                 FROM {table_name}
                 WHERE upload_time BETWEEN %s AND %s
                 ORDER BY upload_time ASC
-                LIMIT %s OFFSET %s
-            ''', (start_date, end_date, page_size, offset))
+            '''
+            cursor.execute(query, (start_date, end_date))
             results = cursor.fetchall()
         connection_pool.return_connection(conn)
 
@@ -277,12 +310,15 @@ def get_images_by_date():
                 ])
                 for row in results
             ]
+            logger.info(f"成功获取设备 {device_sn} 在日期范围 {start_date} - {end_date} 内的图片数据")
             return jsonify(images), 200
         else:
+            logger.info(f"未找到设备 {device_sn} 在日期范围 {start_date} - {end_date} 的图片数据")
             return jsonify({"error": "未找到对应条件的图片"}), 404
     except pymysql.MySQLError as e:
-        logger.error(f"API 数据库错误: {e}")
+        logger.error(f"数据库查询错误: {e}")
         return jsonify({"error": "服务器内部错误"}), 500
+
 
 # === 主入口 ===
 if __name__ == "__main__":
