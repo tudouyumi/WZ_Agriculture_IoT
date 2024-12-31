@@ -1,4 +1,5 @@
 import pymysql
+import os
 import json
 import paho.mqtt.client as mqtt
 import logging
@@ -36,7 +37,14 @@ MYSQL_CONFIG["cursorclass"] = pymysql.cursors.DictCursor
 
 # =================== 日志配置 ===================
 def configure_logger(log_file_path):
-    """配置全局日志"""
+    """配置全局日志，支持路径检测和按天滚动"""
+    # 获取日志文件的目录路径
+    log_dir = os.path.dirname(log_file_path)
+    
+    # 如果目录不存在，则创建目录
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+    
     # 清除所有已有的处理器
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
@@ -55,6 +63,12 @@ def configure_logger(log_file_path):
 
 # 指定日志文件路径
 logger = configure_logger("./logs/sensor_collect/sensor_collect_server.log")
+
+# 测试日志记录
+logger.info("日志系统已成功配置。")
+
+
+
 
 # =================== 数据库连接池 ===================
 try:
@@ -123,7 +137,6 @@ def insert_data(sn, data):
         conn = get_db_connection()
         cursor = conn.cursor()
         conn.begin()
-
         for entry in data:
             if 'read_time' in entry and entry['read_time'] < start_timestamp:
                 logger.info(f"数据时间 {entry['read_time']} 小于程序启动时间，跳过插入。")
@@ -140,55 +153,98 @@ def insert_data(sn, data):
         logger.error(f"插入数据到 {table_name} 时发生错误: {e}")
         raise
 
-def normalize_data(entry):
-    """规范化数据"""
-    entry.setdefault('humidity', 0.0)
-    entry.setdefault('temperature', 0.0)
-    entry.setdefault('co2', 0)
-    entry.setdefault('light', 0)
-    entry.setdefault('read_time', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+def normalize_data(entry, sn):
+    """
+    规范化数据并验证合法性。
+    :param entry: 单条数据记录（字典）
+    :param sn: 当前设备编号（字符串或整数）
+    :return: 返回规范化后的数据字典，或者 `None`（如果数据无效）
+    """
+    # 默认值设置
+    entry.setdefault('humidity', 0.0)  # 默认湿度为 0.0
+    entry.setdefault('temperature', 0.0)  # 默认温度为 0.0
+    entry.setdefault('co2', 0)  # 默认 CO2 为 0
+    entry.setdefault('light', 0)  # 默认光照为 0
+    entry.setdefault('read_time', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))  # 默认读取时间为当前时间
     entry.setdefault('SN', 0)
+    # 返回规范化后的数据
     return entry
 
+
 # =================== MQTT 消息处理 ===================
+import re
+import json
+import logging
+
+logger = logging.getLogger(__name__)
+
 def process_message(topic, payload):
-    try:
-        match = re.search(r'SN_(\d+)', topic)
-        if match:
+    """
+    从主题字符串中提取设备编号并验证其合法性，同时处理有效负载数据。
+    """
+    # 正则匹配主题中的 SN_xxx 格式
+    match = re.fullmatch(r'.*/SN_(\d+)$', topic)
+    
+    if match:
+        try:
+            # 提取设备编号并转换为整数
             sn = int(match.group(1))
+
+            # 验证设备编号合法性
             validate_sn(sn)
+
+            # 日志记录成功处理的消息
             logger.info(f"接收到来自设备 SN_{sn} 的消息")
-        else:
-            logger.error(f"主题格式不正确，无法提取 SN: {topic}")
-            return
+            
+            # 确保数据表已创建
+            create_table(sn)
 
-        create_table(sn)
+            # 解码并解析 JSON 数据
+            try:
+                data = json.loads(payload.decode('utf-8'))
+            except json.JSONDecodeError as e:
+                logger.error(f"解析 JSON 数据时发生错误: {e}")
+                return
+            
+            # 数据处理
+            valid_data = []
+            for entry in data:
+                # 规范化数据（假设 normalize_data 是一个有效的函数）
+                normalized_entry = normalize_data(entry,sn)
 
-        data = json.loads(payload.decode('utf-8'))
-        valid_data = []
+                # 验证湿度范围
+                if not (0 <= normalized_entry['humidity'] <= 100):
+                    logger.error(f"湿度值不在合理范围内: {normalized_entry['humidity']}")
+                    continue
 
-        for entry in data:
-            normalized_entry = normalize_data(entry)
+                # 验证温度范围
+                if not (-30 <= normalized_entry['temperature'] <= 60):
+                    logger.error(f"温度值不在合理范围内: {normalized_entry['temperature']}")
+                    continue
+                    
+                # 确保 SN 与当前设备编号一致
+                if not (str(normalized_entry['SN']) == str(sn)):
+                    logger.error(f"数据 SN 编号与设备 SN_{sn} 不一致或数据内容无sn，跳过该条数据: {entry}")
+                    continue
+                    
+                    
+                # 数据验证通过
+                valid_data.append(normalized_entry)
 
-            if not (0 <= normalized_entry['humidity'] <= 100):
-                logger.error(f"湿度值不在合理范围内: {normalized_entry['humidity']}")
-                continue
-            if not (-30 <= normalized_entry['temperature'] <= 60):
-                logger.error(f"温度值不在合理范围内: {normalized_entry['temperature']}")
-                continue
+            # 如果有有效数据，插入数据库
+            if valid_data:
+                insert_data(sn, valid_data)
+                logger.info(f"已将 {len(valid_data)} 条有效数据插入设备 SN_{sn} 的数据库。")
+            else:
+                logger.warning(f"主题 {topic} 的消息没有有效数据，未插入数据库。")
+        except ValueError as e:
+            logger.error(f"设备编号 SN_{sn} 无效: {e}")
+        except Exception as e:
+            logger.error(f"处理设备 SN_{sn} 的消息时发生错误: {e}")
+    else:
+        # 如果无法提取设备编号，记录错误日志
+        logger.error(f"主题格式不正确，无法提取 SN: {topic}")
 
-            valid_data.append(normalized_entry)
-
-        if valid_data:
-            insert_data(sn, valid_data)
-        else:
-            logger.error(f"主题 {topic} 消息没有有效数据，未插入数据库。")
-    except ValueError as e:
-        logger.error(e)
-    except json.JSONDecodeError as e:
-        logger.error(f"解析 JSON 数据时发生错误: {e}")
-    except Exception as e:
-        logger.error(f"处理主题 {topic} 的消息时发生错误: {e}")
 
 def process_queue():
     """处理队列中的消息"""
