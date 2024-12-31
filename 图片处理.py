@@ -29,7 +29,7 @@ IMAGE_PATTERN = re.compile(config['directories']['image_pattern'])
 
 # 数据库配置
 DB_CONFIG = config['database']
-
+DB_CONFIG["cursorclass"] = pymysql.cursors.DictCursor
 # 缩略图配置
 THUMBNAIL_SIZE = tuple(config['thumbnail']['size'])
 THUMBNAIL_QUALITY = config['thumbnail']['quality']
@@ -49,29 +49,35 @@ IMAGE_PATTERN = re.compile(config['directories']['image_pattern'], re.IGNORECASE
 
 # 配置日志
 def configure_logger(log_file_path):
-    """配置全局日志"""
-    logger = logging.getLogger('data_processing_logger')
-    logger.setLevel(logging.INFO)
+    """配置全局日志，支持路径检测和按天滚动"""
+    # 获取日志文件的目录路径
+    log_dir = os.path.dirname(log_file_path)
     
-    # 防止重复添加处理器
-    if not logger.handlers:
-        # 创建一个按天滚动的日志处理器
-        log_handler = TimedRotatingFileHandler(
-            log_file_path, when="midnight", interval=1, backupCount=7, encoding="utf-8"
-        )
-        log_handler.setLevel(logging.INFO)
-        log_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+    # 如果目录不存在，则创建目录
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
     
-        # 添加处理器到日志记录器
-        logger.addHandler(log_handler)
-    
-        # 设置不向上传播，防止日志消息被父记录器处理
-        logger.propagate = False
-    
-    return logger
+    # 清除所有已有的处理器
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+
+    # 创建一个按天滚动的日志处理器
+    log_handler = TimedRotatingFileHandler(
+        log_file_path, when="midnight", interval=1, backupCount=7, encoding="utf-8"
+    )
+    log_handler.setLevel(logging.INFO)
+    log_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+
+    # 配置全局日志
+    logging.basicConfig(level=logging.INFO, handlers=[log_handler])
+
+    return logging.getLogger(__name__)
 
 # 指定日志文件路径
 logger = configure_logger("./logs/data_processing/data_processing_server.log")
+
+# 测试日志记录
+logger.info("日志系统已成功配置。")
 
 def get_db_connection(db_name):
     return pymysql.connect(
@@ -295,7 +301,7 @@ def main():
     observer = Observer()
 
     # 遍历 SN_*_original 文件夹
-    for sn in range(config['DEVICE_RANGE_START'], config['DEVICE_RANGE_END'] + 1):
+    for sn in range(config['SN_RANGE_START'], config['SN_RANGE_END'] + 1):
         original_dir = os.path.join(PICTURES_DATA_DIR, f"SN_{sn}_original")
         thumbnail_dir = os.path.join(PICTURES_DATA_DIR, f"SN_{sn}_thumbnail")
 
