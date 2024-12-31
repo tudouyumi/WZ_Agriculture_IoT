@@ -1,12 +1,21 @@
 {
   "_comment": "这是配置文件的注释，解释每个字段的用途。",
   "_comment_MQTT": "MQTT 配置，用于消息队列通信",
-  "MQTT_BROKER": "39.106.3.206",
-  "MQTT_PORT": 1883,
+  "MQTT_BROKER": "",
+  "MQTT_PORT": ,
   "MQTT_USERNAME": "mqtt-server",
   "MQTT_PASSWORD": "mqtt-server",
   "MQTT_TOPIC": "/sensor_data/#",
-    
+
+  "_comment_PICTURED_AND_SENSOR_ATABASE": "数据库配置",
+  "database": {
+    "host": "localhost",
+    "user": "root",
+    "password": "wz",
+    "database_sensor": "sensor_data",
+    "database_picture": "picture_data",
+    "charset": "utf8mb4"
+  },
   "_comment_PICTURED_ATABASE": "MySQL 数据库配置，用于存储传感器数据",
   "DB_CONFIG_PICTURE": {
     "host": "localhost",
@@ -31,7 +40,7 @@
   "_comment_GENERAL": "其他配置项",
   "BASE_DIR": "pictures_data",
   "COMPRESS_QUALITY": 85,
-  "BASE_URL": "http://39.106.3.206:51060",
+  "BASE_URL": "",
 
   "_comment_DIRECTORIES": "文件目录配置",
   "directories": {
