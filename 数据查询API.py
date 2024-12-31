@@ -43,7 +43,7 @@ except (FileNotFoundError, json.JSONDecodeError) as e:
     raise
 
 
-DB_CONFIG = config["DB_CONFIG_SENSOR"]
+DB_CONFIG = config["COLLECT_MYSQL_CONFIG"]
 DB_CONFIG["cursorclass"] = pymysql.cursors.DictCursor
 
 # 建立 MySQL 数据库连接
