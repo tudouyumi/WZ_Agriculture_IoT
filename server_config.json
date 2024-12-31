@@ -1,43 +1,55 @@
 {
   "_comment": "这是配置文件的注释，解释每个字段的用途。",
-  "BASE_DIR": "pictures_data",
-  "COMPRESS_QUALITY": 85,
-  "BASE_URL": "",
-  "DB_CONFIG_PICTURE": {
-    "host": "localhost",
-    "user": "root",
-    "password": "",
-    "database": "picture_data",
-    "charset": "utf8mb4"
-  },
-
-    
-  "_comment_DEVICE_RANGE": "DEVICE_RANGE_START 和 DEVICE_RANGE_END 定义了设备的编号范围",
-  "DEVICE_RANGE_START": 1,
-  "DEVICE_RANGE_END": 10,
-
-    
-  "_comment_SENSOR_API": "数据 API 配置",
-  "DB_CONFIG_SENSOR": {
-    "host": "localhost",
-    "user": "root",
-    "password": "",
-    "database": "sensor_data",
-    "charset": "utf8mb4"
-  },
-
-    
-  "_comment_collect_server": "数据收集配置",
-  "MQTT_BROKER": "",
-  "MQTT_PORT": 1883,         
+  "_comment_MQTT": "MQTT 配置，用于消息队列通信",
+  "MQTT_BROKER": "39.106.3.206",
+  "MQTT_PORT": 1883,
   "MQTT_USERNAME": "mqtt-server",
   "MQTT_PASSWORD": "mqtt-server",
   "MQTT_TOPIC": "/sensor_data/#",
+    
+  "_comment_PICTURED_ATABASE": "MySQL 数据库配置，用于存储传感器数据",
+  "DB_CONFIG_PICTURE": {
+    "host": "localhost",
+    "user": "root",
+    "password": "wz",
+    "database": "picture_data",
+    "charset": "utf8mb4"
+  },
+  "_comment_SENSOR_DATABASE": "MySQL 数据库配置，用于存储传感器数据",
   "COLLECT_MYSQL_CONFIG": {
     "host": "localhost",
     "user": "root",
-    "password": "",
+    "password": "wz",
     "database": "sensor_data",
     "charset": "utf8mb4"
+  },
+
+  "_comment_DEVICE_RANGE": "DEVICE_RANGE_START 和 DEVICE_RANGE_END 定义了设备 SN 的编号范围",
+  "SN_RANGE_START": 1,
+  "SN_RANGE_END": 10,
+
+  "_comment_GENERAL": "其他配置项",
+  "BASE_DIR": "pictures_data",
+  "COMPRESS_QUALITY": 85,
+  "BASE_URL": "http://39.106.3.206:51060",
+
+  "_comment_DIRECTORIES": "文件目录配置",
+  "directories": {
+    "pictures_data_dir": "./pictures_data",
+    "original_pattern": "^SN_(\\d+)_original$",
+    "thumbnail_suffix": "_thumbnail",
+    "image_pattern": "^(\\d+)_(\\d{14})\\.(?:jpg|bmp)$"
+  },
+
+  "_comment_THUMBNAIL": "缩略图生成配置",
+  "thumbnail": {
+    "size": [300, 300],
+    "quality": 85
+  },
+
+  "_comment_RETRY": "重试机制配置",
+  "retry": {
+    "delay_seconds": 3,
+    "max_retry_attempts": 30
   }
 }
