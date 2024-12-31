@@ -2,30 +2,39 @@ import pymysql
 import json
 import paho.mqtt.client as mqtt
 import logging
+from logging.handlers import TimedRotatingFileHandler
 from datetime import datetime
 import re
 import queue
 from threading import Thread
-from logging.handlers import TimedRotatingFileHandler
+from logging.handlers import RotatingFileHandler
+from dbutils.pooled_db import PooledDB
+from concurrent.futures import ThreadPoolExecutor
+import atexit
+
 # =================== 关键参数配置 ===================
+# 加载配置文件
+try:
+    with open("server_config.json", "r") as config_file:
+        raw_config = json.load(config_file)
+    config = {k: v for k, v in raw_config.items() if not k.startswith("_")}
+except (FileNotFoundError, json.JSONDecodeError) as e:
+    raise Exception(f"加载配置文件失败: {e}")
 
-# 配置 MySQL 数据库连接
-with open("server_config.json", "r") as config_file:
-    raw_config = json.load(config_file)
+# 配置参数示例
+MQTT_BROKER = config["MQTT_BROKER"]
+MQTT_PORT = config["MQTT_PORT"]
+MQTT_USERNAME = config["MQTT_USERNAME"]
+MQTT_PASSWORD = config["MQTT_PASSWORD"]
+MQTT_TOPIC = config["MQTT_TOPIC"]
 
-# 过滤掉注释键
-config = {k: v for k, v in raw_config.items() if not k.startswith("_")}
+SN_RANGE_START = config["SN_RANGE_START"]
+SN_RANGE_END = config["SN_RANGE_END"]
 
 MYSQL_CONFIG = config["COLLECT_MYSQL_CONFIG"]
 MYSQL_CONFIG["cursorclass"] = pymysql.cursors.DictCursor
-# MQTT 配置
-MQTT_BROKER = config["MQTT_BROKER"]  # MQTT 代理地址
-MQTT_PORT = config["MQTT_PORT"]            # MQTT 代理端口
-MQTT_USERNAME = config["MQTT_USERNAME"]  # MQTT 用户名
-MQTT_PASSWORD = config["MQTT_PASSWORD"]  # MQTT 密码
-MQTT_TOPIC = config["MQTT_TOPIC"] # MQTT 订阅主题
 
-# === 日志配置 ===
+# =================== 日志配置 ===================
 def configure_logger(log_file_path):
     """配置全局日志"""
     # 清除所有已有的处理器
@@ -47,171 +56,161 @@ def configure_logger(log_file_path):
 # 指定日志文件路径
 logger = configure_logger("./logs/sensor_collect/sensor_collect_server.log")
 
-# 全局变量
+# =================== 数据库连接池 ===================
+try:
+    pool = PooledDB(
+        creator=pymysql, maxconnections=10, mincached=2, maxcached=5, blocking=True, **MYSQL_CONFIG
+    )
+except Exception as e:
+    logger.error(f"数据库连接池初始化失败: {e}")
+    raise
+
+def get_db_connection():
+    try:
+        return pool.connection()
+    except Exception as e:
+        logger.error(f"获取数据库连接失败: {e}")
+        raise
+
+# =================== 全局变量 ===================
 client = None
 message_queue = queue.Queue()
-db_connection = None  # 数据库连接
-
-# 程序启动时记录的时间戳
 start_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+created_tables = set()
+executor = ThreadPoolExecutor(max_workers=10)
 
-created_tables = set()  # 缓存已创建的表名
+# =================== 数据校验与表操作 ===================
+def validate_sn(sn):
+    """校验 SN 是否在合法范围内"""
+    if not (SN_RANGE_START <= sn <= SN_RANGE_END):
+        raise ValueError(f"无效的 SN: {sn}，合法范围是 {SN_RANGE_START} 到 {SN_RANGE_END}")
 
-# 连接到 MySQL 数据库
-def get_db_connection():
-    global db_connection
-    if db_connection is None:
-        try:
-            db_connection = pymysql.connect(**MYSQL_CONFIG)
-            logging.info("成功连接到 MySQL 数据库")
-        except pymysql.Error as e:
-            logging.error(f"MySQL 数据库连接错误: {e}")
-            raise
-    return db_connection
-
-# 创建表的函数，确保表存在
 def create_table(sn):
+    """确保数据表存在"""
     global created_tables
-    table_name = f"sensor_data_sn_{sn}"  # 动态生成表名
-    
-    # 如果表已经创建过，则直接返回
+    validate_sn(sn)
+    table_name = f"sensor_data_sn_{sn}"
+
     if table_name in created_tables:
         return
 
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-
-        # 创建表的 SQL 语句
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS {table_name} (
-                id INT AUTO_INCREMENT PRIMARY KEY,    -- 自增主键
-                SN INT NOT NULL,                      -- 设备 SN
-                read_time DATETIME NOT NULL,          -- 读数时间                
-                humidity FLOAT NOT NULL,              -- 湿度
-                temperature FLOAT NOT NULL,           -- 温度
-                co2 INT NOT NULL,                     -- CO2 浓度
-                light INT NOT NULL                    -- 光照强度
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                SN INT NOT NULL,
+                read_time DATETIME NOT NULL,
+                humidity FLOAT NOT NULL,
+                temperature FLOAT NOT NULL,
+                co2 INT NOT NULL,
+                light INT NOT NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         ''')
         conn.commit()
-
-        # 将表名加入缓存
         created_tables.add(table_name)
-        logging.info(f"表 {table_name} 已创建或已存在，添加到缓存。")
+        logger.info(f"表 {table_name} 已创建或已存在。")
     except pymysql.Error as e:
-        logging.error(f"创建表 {table_name} 时发生错误: {e}")
+        logger.error(f"创建表 {table_name} 时发生错误: {e}")
         raise
 
-# 插入数据时加入时间戳比较
 def insert_data(sn, data):
+    """插入数据到数据库"""
+    validate_sn(sn)
+    table_name = f"sensor_data_sn_{sn}"
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-
-        # 启动事务
         conn.begin()
 
         for entry in data:
-            # 比较数据的时间戳，如果小于程序启动时间，则跳过
             if 'read_time' in entry and entry['read_time'] < start_timestamp:
-                logging.info(f"数据时间 {entry['read_time']} 小于程序启动时间，跳过插入。")
-                continue  # 跳过插入
-
+                logger.info(f"数据时间 {entry['read_time']} 小于程序启动时间，跳过插入。")
+                continue
             cursor.execute(f'''
-                INSERT INTO sensor_data_sn_{sn} (SN, read_time, humidity, temperature, co2, light)
+                INSERT INTO {table_name} (SN, read_time, humidity, temperature, co2, light)
                 VALUES (%s, %s, %s, %s, %s, %s)
             ''', (entry['SN'], entry['read_time'], entry['humidity'], entry['temperature'], entry['co2'], entry['light']))
 
-        # 提交事务
         conn.commit()
-        logging.info(f"数据成功插入到表 sensor_data_sn_{sn}")
+        logger.info(f"数据成功插入到表 {table_name}")
     except pymysql.Error as e:
-        conn.rollback()  # 如果发生错误，回滚事务
-        logging.error(f"插入数据到 sensor_data_sn_{sn} 时发生错误: {e}")
+        conn.rollback()
+        logger.error(f"插入数据到 {table_name} 时发生错误: {e}")
         raise
 
-# 规范化数据（检查字段和填充缺失字段）
 def normalize_data(entry):
-    # 如果缺少某些字段，可以设置默认值
-    entry.setdefault('humidity', 0.000)
-    entry.setdefault('temperature', 0.000)
-    entry.setdefault('co2', 000)
-    entry.setdefault('light', 000)
+    """规范化数据"""
+    entry.setdefault('humidity', 0.0)
+    entry.setdefault('temperature', 0.0)
+    entry.setdefault('co2', 0)
+    entry.setdefault('light', 0)
     entry.setdefault('read_time', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-    entry.setdefault('SN', 000)
-
+    entry.setdefault('SN', 0)
     return entry
 
-# 消息处理逻辑
+# =================== MQTT 消息处理 ===================
 def process_message(topic, payload):
     try:
         match = re.search(r'SN_(\d+)', topic)
         if match:
-            sn = int(match.group(1))  # 提取 SN 部分并转换为整数
-            logging.info(f"接收到来自设备 SN_{sn} 的消息")
+            sn = int(match.group(1))
+            validate_sn(sn)
+            logger.info(f"接收到来自设备 SN_{sn} 的消息")
         else:
-            logging.error(f"主题格式不正确，无法提取 SN: {topic}")
-            return  # 如果主题格式不正确，直接返回
+            logger.error(f"主题格式不正确，无法提取 SN: {topic}")
+            return
 
-        # 创建表（如果不存在）
         create_table(sn)
 
-        # 解析 JSON 数据
         data = json.loads(payload.decode('utf-8'))
-
-        # 处理每条数据
         valid_data = []
+
         for entry in data:
             normalized_entry = normalize_data(entry)
 
-            # 数据校验
             if not (0 <= normalized_entry['humidity'] <= 100):
-                logging.error(f"湿度值不在合理范围内: {normalized_entry['humidity']}")
+                logger.error(f"湿度值不在合理范围内: {normalized_entry['humidity']}")
                 continue
-            if not (-40 <= normalized_entry['temperature'] <= 100):
-                logging.error(f"温度值不在合理范围内: {normalized_entry['temperature']}")
-                continue
-            if normalized_entry['read_time'] < start_timestamp:
-                logging.info(f"数据时间 {normalized_entry['read_time']} 小于程序启动时间，跳过插入。")
+            if not (-30 <= normalized_entry['temperature'] <= 60):
+                logger.error(f"温度值不在合理范围内: {normalized_entry['temperature']}")
                 continue
 
             valid_data.append(normalized_entry)
 
-        # 插入数据库
         if valid_data:
             insert_data(sn, valid_data)
-            logging.info(f"主题 {topic} 消息处理成功，SN {sn}")
         else:
-            logging.error(f"主题 {topic} 消息没有有效数据，未插入数据库。")
+            logger.error(f"主题 {topic} 消息没有有效数据，未插入数据库。")
+    except ValueError as e:
+        logger.error(e)
     except json.JSONDecodeError as e:
-        logging.error(f"解析 JSON 数据时发生错误: {e}")
+        logger.error(f"解析 JSON 数据时发生错误: {e}")
     except Exception as e:
-        logging.error(f"处理主题 {topic} 的消息时发生错误: {e}")
+        logger.error(f"处理主题 {topic} 的消息时发生错误: {e}")
 
-# 消费队列中的消息
 def process_queue():
+    """处理队列中的消息"""
     while True:
         topic, payload = message_queue.get()
         try:
-            process_message(topic, payload)
+            executor.submit(process_message, topic, payload)
         finally:
             message_queue.task_done()
 
-# 启动消息处理线程
 Thread(target=process_queue, daemon=True).start()
 
-# 处理 MQTT 消息
 def on_message(client, userdata, msg):
     if msg.retain:
-        logging.info(f"忽略保留消息: {msg.topic}")
+        logger.info(f"忽略保留消息: {msg.topic}")
         return
     try:
         message_queue.put((msg.topic, msg.payload))
-        logging.info(f"消息已放入队列: {msg.topic}")
+        logger.info(f"消息已放入队列: {msg.topic}")
     except Exception as e:
-        logging.error(f"将消息放入队列时发生错误: {e}")
-# 设置 MQTT 客户端
+        logger.error(f"将消息放入队列时发生错误: {e}")
+
 def setup_mqtt_client():
     global client
     client = mqtt.Client()
@@ -220,28 +219,58 @@ def setup_mqtt_client():
 
     try:
         client.connect(MQTT_BROKER, MQTT_PORT, 60)
-        logging.info(f"成功连接到 MQTT 代理: {MQTT_BROKER}:{MQTT_PORT}")
+        client.reconnect_delay_set(min_delay=1, max_delay=60)
+        logger.info(f"成功连接到 MQTT 代理: {MQTT_BROKER}:{MQTT_PORT}")
     except Exception as e:
-        logging.error(f"连接到 MQTT 代理时发生错误: {e}")
+        logger.error(f"连接到 MQTT 代理时发生错误: {e}")
         raise
 
     client.subscribe(MQTT_TOPIC)
-    logging.info(f"成功订阅 {MQTT_TOPIC} 主题。")
+    logger.info(f"成功订阅 {MQTT_TOPIC} 主题。")
     client.loop_forever()
 
+# =================== 程序启动与关闭 ===================
 def shutdown():
-    global db_connection
-    if db_connection:
-        db_connection.close()
-        logging.info("MySQL 数据库连接已关闭。")
-    if client is not None:
-        client.disconnect()
-        logging.info("成功关闭 MQTT 连接。")
+    """安全关闭所有连接和释放资源"""
+    global client
+    try:
+        # 关闭 MySQL 连接池
+        if pool:
+            pool.close()
+            logger.info("MySQL 连接池已安全关闭。")
+    except Exception as e:
+        logger.error(f"关闭 MySQL 连接池时发生错误: {e}")
+    
+    try:
+        # 断开 MQTT 连接
+        if client:
+            client.disconnect()
+            logger.info("MQTT 客户端已安全断开连接。")
+    except Exception as e:
+        logger.error(f"断开 MQTT 连接时发生错误: {e}")
+    
+    try:
+        # 关闭线程池（如果存在未完成任务，则等待它们完成）
+        executor.shutdown(wait=True)
+        logger.info("线程池已安全关闭。")
+    except Exception as e:
+        logger.error(f"关闭线程池时发生错误: {e}")
+    
+    logger.info("程序已安全退出。")
+
+# 注册安全关闭函数，确保在程序终止时执行
+atexit.register(shutdown)
+
 
 if __name__ == '__main__':
     try:
-        setup_mqtt_client()
-    except Exception as e:
-        logging.error(f"设置 MQTT 客户端时发生错误: {e}")
-    finally:
+        logger.info("程序启动中...")
+        setup_mqtt_client()  # 启动 MQTT 客户端并订阅主题
+    except KeyboardInterrupt:
+        logger.info("检测到用户中断 (Ctrl+C)，正在关闭程序...")
         shutdown()
+    except Exception as e:
+        logger.error(f"程序运行时发生未捕获的错误: {e}")
+        shutdown()
+    finally:
+        logger.info("程序退出完成。")
