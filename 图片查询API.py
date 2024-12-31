@@ -7,23 +7,24 @@ from queue import Queue
 from datetime import datetime
 from collections import OrderedDict
 from logging.handlers import TimedRotatingFileHandler
-# === 配置 ===
-with open("server_config.json", "r") as config_file:
-    raw_config = json.load(config_file)
 
-# 过滤掉注释键
-config = {k: v for k, v in raw_config.items() if not k.startswith("_")}
+try:
+    with open("server_config.json", "r") as config_file:
+        raw_config = json.load(config_file)
+    config = {k: v for k, v in raw_config.items() if not k.startswith("_")}
+except (FileNotFoundError, json.JSONDecodeError) as e:
+    logging.error(f"加载配置文件失败: {e}")
+    raise
 
 
 BASE_DIR = config["BASE_DIR"]
 COMPRESS_QUALITY = config["COMPRESS_QUALITY"]
 BASE_URL = config["BASE_URL"]
 DB_CONFIG_PICTURE = config["DB_CONFIG_PICTURE"]
-DEVICE_RANGE = range(config["DEVICE_RANGE_START"], config["DEVICE_RANGE_END"] + 1)
+DEVICE_RANGE = range(config["SN_RANGE_START"], config["SN_RANGE_END"] + 1)
 
 DB_CONFIG_PICTURE["cursorclass"] = pymysql.cursors.DictCursor
 
-DEVICE_RANGE = range(1, 11)  # 动态设备范围配置
 
 # === 日志配置 ===
 def configure_logger(log_file_path):
